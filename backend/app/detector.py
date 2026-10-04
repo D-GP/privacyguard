@@ -7,7 +7,7 @@ from .transformer_detector import TransformerDetector
 
 
 # ============================================================
-# PRESIDIO IMPORT
+# PRESIDIO
 # ============================================================
 
 try:
@@ -39,58 +39,176 @@ class DetectedEntity:
 
 
 # ============================================================
-# REGEX PATTERNS
+# INDIAN PII REGEX PATTERNS
 # ============================================================
 
 PATTERNS = {
 
-    # Email
+    # --------------------------------------------------------
+    # EMAIL
+    # --------------------------------------------------------
+
     "EMAIL_ADDRESS":
         r"\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b",
 
-    # Indian phone number
+
+    # --------------------------------------------------------
+    # INDIAN PHONE NUMBER
+    # --------------------------------------------------------
+
     "PHONE_NUMBER":
         r"(?<!\d)(?:\+91[-\s]?)?[6-9]\d{9}(?!\d)",
 
-    # IPv4 address
+
+    # --------------------------------------------------------
+    # IP ADDRESS
+    # --------------------------------------------------------
+
     "IP_ADDRESS":
         r"\b(?:\d{1,3}\.){3}\d{1,3}\b",
 
-    # Indian PAN
+
+    # --------------------------------------------------------
+    # INDIAN PAN
+    #
+    # Example:
+    # ABCDE1234F
+    # --------------------------------------------------------
+
     "PAN_IN":
         r"\b[A-Z]{5}[0-9]{4}[A-Z]\b",
 
-    # Indian IFSC
+
+    # --------------------------------------------------------
+    # INDIAN IFSC
+    #
+    # Example:
+    # SBIN0001234
+    # --------------------------------------------------------
+
     "IFSC_IN":
         r"\b[A-Z]{4}0[A-Z0-9]{6}\b",
 
-    # Aadhaar-like number
-    "AADHAAR_LIKE":
+
+    # --------------------------------------------------------
+    # AADHAAR
+    #
+    # Accept:
+    # 1234 5678 9012
+    # 1234-5678-9012
+    # 123456789012
+    # --------------------------------------------------------
+
+    "AADHAAR_IN":
         r"(?<!\d)\d{4}[\s-]?\d{4}[\s-]?\d{4}(?!\d)",
 
-    # Credit/debit card-like number
+
+    # --------------------------------------------------------
+    # CREDIT / DEBIT CARD
+    # --------------------------------------------------------
+
     "CREDIT_CARD":
         r"(?<!\d)(?:\d[ -]?){13,19}(?!\d)",
+
+
+    # --------------------------------------------------------
+    # INDIAN PASSPORT
+    #
+    # Example:
+    # A1234567
+    # --------------------------------------------------------
+
+    "PASSPORT_IN":
+        r"\b[A-Z][0-9]{7}\b",
+
+
+    # --------------------------------------------------------
+    # UPI ID
+    #
+    # Examples:
+    # rahul@oksbi
+    # name@upi
+    # user123@paytm
+    # --------------------------------------------------------
+
+    "UPI_ID":
+        r"\b[a-zA-Z0-9._-]{2,}@[a-zA-Z]{2,}\b",
+
+
+    # --------------------------------------------------------
+    # VEHICLE REGISTRATION
+    #
+    # Examples:
+    # KL07AB1234
+    # KA01MN5678
+    # TN38C1234
+    # --------------------------------------------------------
+
+    "VEHICLE_REGISTRATION":
+        r"\b[A-Z]{2}[-\s]?\d{1,2}[-\s]?[A-Z]{1,3}[-\s]?\d{4}\b",
+
+
+    # --------------------------------------------------------
+    # BANK ACCOUNT
+    #
+    # This is intentionally context-dependent.
+    # The actual detection is handled separately below.
+    # --------------------------------------------------------
+
 }
 
 
 # ============================================================
-# SENSITIVITY VALUES
+# BANK ACCOUNT CONTEXT
+# ============================================================
+
+BANK_ACCOUNT_CONTEXT = re.compile(
+    r"""
+    (?:
+        bank\s+account
+        |
+        account\s+number
+        |
+        a\/c\s+number
+        |
+        account\s+no
+        |
+        a\/c
+    )
+    [\s:#-]*
+    (\d{9,18})
+    """,
+    re.IGNORECASE | re.VERBOSE,
+)
+
+
+# ============================================================
+# SENSITIVITY
 # ============================================================
 
 SENSITIVITY = {
 
-    "AADHAAR_LIKE": 0.95,
+    "AADHAAR_IN": 0.95,
 
     "CREDIT_CARD": 0.95,
 
     "PAN_IN": 0.90,
 
+    "PASSPORT_IN": 0.90,
+
+    "BANK_ACCOUNT_IN": 0.90,
+
+    "UPI_ID": 0.85,
+
     "PHONE_NUMBER": 0.85,
+
+    "VEHICLE_REGISTRATION": 0.80,
 
     "EMAIL_ADDRESS": 0.75,
 
     "IP_ADDRESS": 0.65,
+
+    "IFSC_IN": 0.60,
 
     "PERSON": 0.55,
 
@@ -99,8 +217,6 @@ SENSITIVITY = {
     "ORGANIZATION": 0.45,
 
     "DATE_TIME": 0.25,
-
-    "IFSC_IN": 0.60,
 }
 
 
@@ -133,6 +249,7 @@ class HybridDetector:
 
                 self.engine = None
 
+
         # ----------------------------------------------------
         # TRANSFORMER NER
         # ----------------------------------------------------
@@ -156,6 +273,40 @@ class HybridDetector:
 
 
     # ========================================================
+    # LUHN VALIDATION
+    # ========================================================
+
+    @staticmethod
+    def _luhn_valid(number: str) -> bool:
+
+        digits = [
+            int(char)
+            for char in number
+            if char.isdigit()
+        ]
+
+        if len(digits) < 13:
+            return False
+
+        checksum = 0
+
+        parity = len(digits) % 2
+
+        for index, digit in enumerate(digits):
+
+            if index % 2 == parity:
+
+                digit *= 2
+
+                if digit > 9:
+                    digit -= 9
+
+            checksum += digit
+
+        return checksum % 10 == 0
+
+
+    # ========================================================
     # REGEX DETECTION
     # ========================================================
 
@@ -166,6 +317,11 @@ class HybridDetector:
 
         out = []
 
+
+        # ----------------------------------------------------
+        # Normal regex patterns
+        # ----------------------------------------------------
+
         for label, pattern in PATTERNS.items():
 
             for match in re.finditer(
@@ -173,16 +329,20 @@ class HybridDetector:
                 text,
                 flags=(
                     re.IGNORECASE
-                    if label == "EMAIL_ADDRESS"
+                    if label in {
+                        "EMAIL_ADDRESS",
+                        "UPI_ID"
+                    }
                     else 0
                 ),
             ):
 
                 value = match.group(0)
 
-                # --------------------------------------------
-                # Validate IP address
-                # --------------------------------------------
+
+                # ------------------------------------------------
+                # IP VALIDATION
+                # ------------------------------------------------
 
                 if label == "IP_ADDRESS":
 
@@ -199,9 +359,38 @@ class HybridDetector:
 
                         continue
 
-                # --------------------------------------------
-                # Add detected entity
-                # --------------------------------------------
+
+                # ------------------------------------------------
+                # Aadhaar validation
+                # ------------------------------------------------
+
+                if label == "AADHAAR_IN":
+
+                    digits = re.sub(
+                        r"\D",
+                        "",
+                        value
+                    )
+
+                    if len(digits) != 12:
+
+                        continue
+
+
+                # ------------------------------------------------
+                # Credit card Luhn validation
+                # ------------------------------------------------
+
+                if label == "CREDIT_CARD":
+
+                    if not self._luhn_valid(value):
+
+                        continue
+
+
+                # ------------------------------------------------
+                # Add entity
+                # ------------------------------------------------
 
                 out.append(
                     DetectedEntity(
@@ -219,6 +408,37 @@ class HybridDetector:
                         source="regex/checksum",
                     )
                 )
+
+
+        # ----------------------------------------------------
+        # Bank account detection
+        # ----------------------------------------------------
+
+        for match in BANK_ACCOUNT_CONTEXT.finditer(text):
+
+            account_number = match.group(1)
+
+            start = match.start(1)
+
+            end = match.end(1)
+
+            out.append(
+                DetectedEntity(
+
+                    entity_type="BANK_ACCOUNT_IN",
+
+                    text=account_number,
+
+                    start=start,
+
+                    end=end,
+
+                    confidence=0.95,
+
+                    source="regex/context",
+                )
+            )
+
 
         return out
 
@@ -252,6 +472,7 @@ class HybridDetector:
 
             return []
 
+
         return [
 
             DetectedEntity(
@@ -279,7 +500,7 @@ class HybridDetector:
 
 
     # ========================================================
-    # TRANSFORMER NER DETECTION
+    # TRANSFORMER NER
     # ========================================================
 
     def _transformer(
@@ -306,6 +527,7 @@ class HybridDetector:
 
             return []
 
+
         return [
 
             DetectedEntity(
@@ -328,18 +550,13 @@ class HybridDetector:
 
 
     # ========================================================
-    # MERGE RESULTS
+    # MERGE / REMOVE DUPLICATES
     # ========================================================
 
     @staticmethod
     def _merge(
         items: List[DetectedEntity]
     ) -> List[DetectedEntity]:
-
-        # Sort entities by:
-        # 1. Start position
-        # 2. Longer entity first
-        # 3. Higher confidence first
 
         items = sorted(
             items,
@@ -350,16 +567,19 @@ class HybridDetector:
             ),
         )
 
+
         accepted = []
+
 
         for item in items:
 
             duplicate = False
 
+
             for existing in accepted:
 
                 # ------------------------------------------------
-                # Entity completely inside another entity
+                # Entity inside another entity
                 # ------------------------------------------------
 
                 if (
@@ -371,6 +591,7 @@ class HybridDetector:
                     duplicate = True
 
                     break
+
 
                 # ------------------------------------------------
                 # Calculate overlap
@@ -390,23 +611,22 @@ class HybridDetector:
                     ),
                 )
 
+
                 smaller_length = max(
                     1,
 
                     min(
                         item.end - item.start,
-                        existing.end - existing.start,
+                        existing.end - existing.start
                     ),
                 )
+
 
                 overlap_ratio = (
                     overlap /
                     smaller_length
                 )
 
-                # ------------------------------------------------
-                # Ignore strongly overlapping entity
-                # ------------------------------------------------
 
                 if overlap_ratio > 0.5:
 
@@ -414,9 +634,11 @@ class HybridDetector:
 
                     break
 
+
             if not duplicate:
 
                 accepted.append(item)
+
 
         return sorted(
             accepted,
@@ -434,12 +656,13 @@ class HybridDetector:
     ) -> List[DetectedEntity]:
 
         # ----------------------------------------------------
-        # 1. Regex
+        # 1. Regex / Indian PII
         # ----------------------------------------------------
 
         regex_entities = self._regex(
             text
         )
+
 
         # ----------------------------------------------------
         # 2. Presidio
@@ -449,16 +672,18 @@ class HybridDetector:
             text
         )
 
+
         # ----------------------------------------------------
-        # 3. Transformer
+        # 3. Transformer NER
         # ----------------------------------------------------
 
         transformer_entities = self._transformer(
             text
         )
 
+
         # ----------------------------------------------------
-        # Combine everything
+        # Combine
         # ----------------------------------------------------
 
         all_entities = (
@@ -469,8 +694,9 @@ class HybridDetector:
             transformer_entities
         )
 
+
         # ----------------------------------------------------
-        # Remove duplicates/overlaps
+        # Remove duplicates
         # ----------------------------------------------------
 
         return self._merge(
