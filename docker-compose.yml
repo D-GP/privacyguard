@@ -1,0 +1,20 @@
+services:
+  backend:
+    build: ./backend
+    ports:
+      - "5000:5000"
+    environment:
+      SECRET_KEY: change-this-in-production
+      JWT_SECRET_KEY: change-this-too
+      DATABASE_URL: sqlite:////data/privacyguard.db
+      MAX_UPLOAD_MB: 10
+    volumes:
+      - privacyguard_data:/data
+  frontend:
+    build: ./frontend
+    ports:
+      - "8080:80"
+    depends_on:
+      - backend
+volumes:
+  privacyguard_data:
