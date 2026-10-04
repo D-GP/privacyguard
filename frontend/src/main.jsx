@@ -25,10 +25,158 @@ function Risk({level,score}){return <span className={`risk ${String(level).toLow
 function Loading(){return <div className="loading">Loading secure workspace…</div>}
 function Empty({text}){return <div className="empty"><FileText size={25}/><p>{text}</p></div>}
 
-function Analyzer(){const [text,setText]=useState('');const [file,setFile]=useState(null);const [result,setResult]=useState(null);const [sanitized,setSanitized]=useState(null);const [mode,setMode]=useState('adaptive');const [busy,setBusy]=useState(false);const [error,setError]=useState('');
- const analyze=async()=>{setBusy(true);setError('');try{const r=file?await api.analyzeFile(file):await api.analyzeText({text,title:'Workspace analysis'});setResult(r);setSanitized(null)}catch(e){setError(e.message)}finally{setBusy(false)}};
- const sanitize=async()=>{if(!result)return;setBusy(true);try{setSanitized(await api.sanitize(result.id,mode))}catch(e){setError(e.message)}finally{setBusy(false)}};
- return <div className="analyzer"><div className="panel input-panel"><div className="panel-title"><div><h3>Analyze sensitive content</h3><p>Paste text or upload a TXT, PDF, or DOCX file.</p></div><span className="secure-badge"><Activity size={15}/>Hybrid pipeline</span></div><textarea value={text} onChange={e=>{setText(e.target.value);setFile(null)}} placeholder="Example: Contact Priya at priya@example.com or +91 9876543210…"/><div className="input-actions"><label className="file-btn">Choose file<input type="file" accept=".txt,.pdf,.docx" onChange={e=>{setFile(e.target.files?.[0]||null);setText('')}}/></label>{file&&<span className="file-name">{file.name}</span>}<button className="primary" disabled={busy||(!text.trim()&&!file)} onClick={analyze}>{busy?'Analyzing…':'Analyze privacy risk'}</button></div>{error&&<div className="error">{error}</div>}</div>{result&&<><div className="result-grid"><div className="panel risk-card"><span className="tag">OVERALL PRIVACY RISK</span><div className="risk-number">{Math.round(result.risk.score*100)}<small>/100</small></div><Risk level={result.risk.level} score={result.risk.score}/><div className="explanations">{result.risk.explanations.map((x,i)=><p key={i}>• {x}</p>)}</div></div><div className="panel"><div className="panel-title"><div><h3>Detected entities</h3><p>{result.entities.length} findings across the input</p></div></div><div className="entity-table">{result.entities.map((e,i)=><div className="entity-row" key={i}><div><b>{e.entity_type}</b><small>{e.source}</small></div><span>{e.text}</span><strong>{Math.round(e.confidence*100)}%</strong></div>)}</div></div></div><div className="panel"><div className="panel-title"><div><h3>Adaptive de-identification</h3><p>Transform the detected entities, then re-scan the output for residual leakage.</p></div><div className="sanitize-controls"><select value={mode} onChange={e=>setMode(e.target.value)}><option value="adaptive">Adaptive policy</option><option value="pseudonymize">Pseudonymize</option><option value="mask">Mask</option><option value="remove">Remove</option><option value="hash">Hash</option></select><button className="primary" disabled={busy} onClick={sanitize}>{busy?'Processing…':'Sanitize & audit'}</button></div></div>{sanitized&&<div className="sanitize-result"><div><span className="tag">SANITIZED OUTPUT</span><pre>{sanitized.sanitized_text}</pre></div><div className="before-after"><div><small>Before</small><b>{Math.round(result.risk.score*100)}%</b></div><div className="arrow">→</div><div><small>After</small><b>{Math.round(sanitized.post_risk.score*100)}%</b></div><div><small>Risk reduction</small><b>{Math.round(sanitized.risk_reduction*100)} pts</b></div></div>{sanitized.remaining_entities.length>0&&<div className="warning">Output audit found {sanitized.remaining_entities.length} residual entity/ies. Review before external sharing.</div>}</div>}</div></div></>}
+function Analyzer(){
+  const [text,setText]=useState('');
+  const [file,setFile]=useState(null);
+  const [result,setResult]=useState(null);
+  const [sanitized,setSanitized]=useState(null);
+  const [mode,setMode]=useState('adaptive');
+  const [busy,setBusy]=useState(false);
+  const [error,setError]=useState('');
+
+  const analyze=async()=>{
+    setBusy(true);
+    setError('');
+    try{
+      const r=file?await api.analyzeFile(file):await api.analyzeText({text,title:'Workspace analysis'});
+      setResult(r);
+      setSanitized(null);
+    }catch(e){
+      setError(e.message);
+    }finally{
+      setBusy(false);
+    }
+  };
+
+  const sanitize=async()=>{
+    if(!result) return;
+    setBusy(true);
+    try{
+      setSanitized(await api.sanitize(result.id,mode));
+    }catch(e){
+      setError(e.message);
+    }finally{
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className="analyzer">
+      <div className="panel input-panel">
+        <div className="panel-title">
+          <div>
+            <h3>Analyze sensitive content</h3>
+            <p>Paste text or upload a TXT, PDF, or DOCX file.</p>
+          </div>
+          <span className="secure-badge"><Activity size={15}/>Hybrid pipeline</span>
+        </div>
+        <textarea
+          value={text}
+          onChange={e=>{setText(e.target.value);setFile(null)}}
+          placeholder="Example: Contact Priya at priya@example.com or +91 9876543210…"
+        />
+        <div className="input-actions">
+          <label className="file-btn">
+            Choose file
+            <input type="file" accept=".txt,.pdf,.docx" onChange={e=>{setFile(e.target.files?.[0]||null);setText('')}}/>
+          </label>
+          {file&&<span className="file-name">{file.name}</span>}
+          <button className="primary" disabled={busy||(!text.trim()&&!file)} onClick={analyze}>
+            {busy?'Analyzing…':'Analyze privacy risk'}
+          </button>
+        </div>
+        {error&&<div className="error">{error}</div>}
+      </div>
+
+      {result && (
+        <>
+          <div className="result-grid">
+            <div className="panel risk-card">
+              <span className="tag">OVERALL PRIVACY RISK</span>
+              <div className="risk-number">
+                {Math.round(result.risk.score*100)}<small>/100</small>
+              </div>
+              <Risk level={result.risk.level} score={result.risk.score}/>
+              <div className="explanations">
+                {result.risk.explanations.map((x,i)=><p key={i}>• {x}</p>)}
+              </div>
+            </div>
+
+            <div className="panel">
+              <div className="panel-title">
+                <div>
+                  <h3>Detected entities</h3>
+                  <p>{result.entities.length} findings across the input</p>
+                </div>
+              </div>
+              <div className="entity-table">
+                {result.entities.map((e,i)=>(
+                  <div className="entity-row" key={i}>
+                    <div>
+                      <b>{e.entity_type}</b>
+                      <small>{e.source}</small>
+                    </div>
+                    <span>{e.text}</span>
+                    <strong>{Math.round(e.confidence*100)}%</strong>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </div>
+
+          <div className="panel">
+            <div className="panel-title">
+              <div>
+                <h3>Adaptive de-identification</h3>
+                <p>Transform the detected entities, then re-scan the output for residual leakage.</p>
+              </div>
+              <div className="sanitize-controls">
+                <select value={mode} onChange={e=>setMode(e.target.value)}>
+                  <option value="adaptive">Adaptive policy</option>
+                  <option value="pseudonymize">Pseudonymize</option>
+                  <option value="mask">Mask</option>
+                  <option value="remove">Remove</option>
+                  <option value="hash">Hash</option>
+                </select>
+                <button className="primary" disabled={busy} onClick={sanitize}>
+                  {busy?'Processing…':'Sanitize & audit'}
+                </button>
+              </div>
+            </div>
+
+            {sanitized && (
+              <div className="sanitize-result">
+                <div>
+                  <span className="tag">SANITIZED OUTPUT</span>
+                  <pre>{sanitized.sanitized_text}</pre>
+                </div>
+                <div className="before-after">
+                  <div>
+                    <small>Before</small>
+                    <b>{Math.round(result.risk.score*100)}%</b>
+                  </div>
+                  <div className="arrow">→</div>
+                  <div>
+                    <small>After</small>
+                    <b>{Math.round(sanitized.post_risk.score*100)}%</b>
+                  </div>
+                  <div>
+                    <small>Risk reduction</small>
+                    <b>{Math.round(sanitized.risk_reduction*100)} pts</b>
+                  </div>
+                </div>
+                {sanitized.remaining_entities.length > 0 && (
+                  <div className="warning">
+                    Output audit found {sanitized.remaining_entities.length} residual entity/ies. Review before external sharing.
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+        </>
+      )}
+    </div>
+  );
 }
 
 function HistoryPage(){const [rows,setRows]=useState([]);useEffect(()=>{api.scans().then(setRows)},[]);return <div className="panel"><div className="panel-title"><div><h3>Scan history</h3><p>Your latest privacy assessments and their risk outcomes.</p></div></div>{rows.length?<div className="history-table"><div className="table-head"><span>Document</span><span>Source</span><span>Entities</span><span>Risk</span><span>Date</span></div>{rows.map(s=><div className="table-row" key={s.id}><b>{s.title}</b><span>{s.source_type.toUpperCase()}</span><span>{s.entity_count}</span><Risk level={s.risk_level} score={s.risk_score}/><span>{new Date(s.created_at).toLocaleString()}</span></div>)}</div>:<Empty text="No scan history yet."/>}</div>}
