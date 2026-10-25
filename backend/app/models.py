@@ -9,6 +9,9 @@ class User(db.Model):
     role = db.Column(db.String(30), nullable=False, default="analyst")
     created_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
 
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+
 class Scan(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     user_id = db.Column(db.Integer, db.ForeignKey("user.id"), nullable=False)
@@ -24,6 +27,9 @@ class Scan(db.Model):
     created_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
     entities = db.relationship("Entity", backref="scan", cascade="all, delete-orphan")
 
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+
 class Entity(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     scan_id = db.Column(db.Integer, db.ForeignKey("scan.id"), nullable=False)
@@ -35,6 +41,9 @@ class Entity(db.Model):
     source = db.Column(db.String(40), nullable=False, default="regex")
     risk_contribution = db.Column(db.Float, nullable=False, default=0.0)
 
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+
 class AuditLog(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     user_id = db.Column(db.Integer, db.ForeignKey("user.id"), nullable=False)
@@ -42,3 +51,6 @@ class AuditLog(db.Model):
     scan_id = db.Column(db.Integer, nullable=True)
     details = db.Column(db.Text, nullable=True)
     created_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
+
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)

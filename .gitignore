@@ -5,8 +5,13 @@
 *.pyo
 *.pyd
 .venv/
+.venv*/
 **/.venv/
+**/.venv*/
 venv/
+venv*/
+**/venv/
+**/venv*/
 ENV/
 *.db
 *.sqlite3

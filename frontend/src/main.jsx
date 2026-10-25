@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { createRoot } from 'react-dom/client';
-import { ShieldCheck, LayoutDashboard, ScanSearch, History, FileText, LogOut, Menu, X, Activity, LockKeyhole, ShieldAlert, AlertTriangle, FileWarning } from 'lucide-react';
+import { ShieldCheck, LayoutDashboard, ScanSearch, History, FileText, LogOut, Menu, X, Activity, LockKeyhole, ShieldAlert, AlertTriangle, FileWarning, RefreshCw } from 'lucide-react';
 import { api } from './services/api';
 import './styles/app.css';
 
@@ -24,50 +24,25 @@ function Dashboard() {
   const [scans, setScans] = useState([]);
   const [piiCategories, setPiiCategories] = useState([]);
   const [error, setError] = useState('');
+  const [refreshKey, setRefreshKey] = useState(0);
+  const [refreshing, setRefreshing] = useState(false);
 
   useEffect(() => {
+    let active = true;
+
     const loadDashboard = async () => {
       try {
         setError('');
+        setRefreshing(true);
+        const dashboardData = await api.dashboard();
+        if (!active) return;
 
-        const [dashboardData, scanData] = await Promise.all([
-          api.dashboard(),
-          api.scans(),
-        ]);
-
-        const summaries = Array.isArray(scanData) ? scanData : [];
-        const recentScans = summaries.slice(0, 5);
-
-        // Load the real entity data from each scan so the category
-        // analytics are based on actual detections, not sample values.
-        const details = await Promise.all(
-          summaries.map(async (scan) => {
-            try {
-              return await api.scan(scan.id);
-            } catch {
-              return null;
-            }
-          })
-        );
-
-        const counts = {};
-
-        details.forEach((scan) => {
-          if (!scan || !Array.isArray(scan.entities)) return;
-
-          scan.entities.forEach((entity) => {
-            const rawType = String(
-              entity.entity_type || entity.type || 'OTHER'
-            ).trim();
-
-            if (!rawType) return;
-
-            const normalized = rawType.toUpperCase();
-            counts[normalized] = (counts[normalized] || 0) + 1;
-          });
-        });
-
-        const categoryEntries = Object.entries(counts)
+        const recentScans = Array.isArray(dashboardData.recent_scans)
+          ? dashboardData.recent_scans
+          : [];
+        const categoryEntries = Object.entries(dashboardData.pii_categories || {})
+          .map(([type, count]) => [String(type).trim().toUpperCase(), Number(count) || 0])
+          .filter(([type]) => Boolean(type))
           .sort((a, b) => b[1] - a[1])
           .slice(0, 8);
 
@@ -75,12 +50,15 @@ function Dashboard() {
         setScans(recentScans);
         setPiiCategories(categoryEntries);
       } catch (err) {
-        setError(err.message || 'Unable to load dashboard data.');
+        if (active) setError(err.message || 'Unable to load dashboard data.');
+      } finally {
+        if (active) setRefreshing(false);
       }
     };
 
     loadDashboard();
-  }, []);
+    return () => { active = false; };
+  }, [refreshKey]);
 
   if (!d && error) {
     return (
@@ -92,6 +70,12 @@ function Dashboard() {
 
   if (!d) return <Loading />;
 
+  const sanitizedScans = Number(d.sanitized_scans ?? 0);
+  const totalScans = Number(d.total_scans ?? 0);
+  const pendingScans = Number(d.pending_sanitization ?? Math.max(0, totalScans - sanitizedScans));
+  // Backend dashboard risk averages are on a 0–100 scale.
+  const residualRisk = d.average_residual_risk == null ? null : Number(d.average_residual_risk);
+  const sanitizationPercent = totalScans ? Math.round((sanitizedScans / totalScans) * 100) : 0;
   const riskDistribution = d.risk_distribution || {};
   const riskEntries = Object.entries(riskDistribution).map(([level, value]) => [
     level,
@@ -103,10 +87,9 @@ function Dashboard() {
     0
   );
 
-  const totalPiiEntities = piiCategories.reduce(
-    (sum, [, value]) => sum + Number(value || 0),
-    0
-  );
+  // The chart displays at most eight categories, but its denominator
+  // must include ALL entities, not just the displayed categories.
+  const totalPiiEntities = Number(d.entities_found) || 0;
 
   const getCategoryPercentage = (count) =>
     totalPiiEntities > 0
@@ -120,6 +103,14 @@ function Dashboard() {
 
   return (
     <>
+      <div className="dashboard-actions">
+        <span className="dashboard-hint">Live workspace statistics · refresh after a new analysis or sanitization</span>
+        <button type="button" className="secondary-btn dashboard-refresh" onClick={() => setRefreshKey(k => k + 1)} disabled={refreshing}>
+          <RefreshCw size={16} className={refreshing ? 'refresh-spinning' : ''} />
+          {refreshing ? 'Refreshing…' : 'Refresh dashboard'}
+        </button>
+      </div>
+      {error && <div className="error" role="alert">{error}</div>}
       <div className="hero">
         <div>
           <span className="tag">PRIVACY INTELLIGENCE</span>
@@ -144,12 +135,29 @@ function Dashboard() {
         <Stat label="Entities found" value={d.entities_found ?? 0} />
       </div>
 
+      <section className="panel sanitization-overview" aria-label="Sanitization overview">
+        <div className="panel-title">
+          <div><h3>Sanitization overview</h3><p>Progress and residual exposure across your workspace</p></div>
+          <span className="tag">{sanitizationPercent}% COMPLETED</span>
+        </div>
+        <div className="sanitization-metrics">
+          <div className="sanitization-metric"><small>Sanitized scans</small><strong>{sanitizedScans}</strong><span>Output generated</span></div>
+          <div className="sanitization-metric"><small>Pending sanitization</small><strong>{pendingScans}</strong><span>Not yet sanitized</span></div>
+          <div className="sanitization-metric"><small>Average original risk</small><strong>{Number(d.average_risk || 0).toFixed(1)}%</strong><span>All scans · before processing</span></div>
+          <div className="sanitization-metric"><small>Average residual risk</small><strong>{sanitizedScans && Number.isFinite(residualRisk) ? `${residualRisk.toFixed(1)}%` : '—'}</strong><span>Sanitized scans only</span></div>
+        </div>
+        <div className="sanitization-progress" role="progressbar" aria-valuenow={sanitizationPercent} aria-valuemin={0} aria-valuemax={100} aria-label="Sanitization completion">
+          <i style={{width: `${sanitizationPercent}%`}} />
+        </div>
+        <p className="sanitization-note">Original and residual averages use different scan populations. They are not a paired risk-reduction calculation; always review the sanitized output before sharing.</p>
+      </section>
+
       <div className="grid-2">
         <div className="panel">
           <div className="panel-title">
             <div>
               <h3>Risk distribution</h3>
-              <p>Across your recent workspace scans</p>
+              <p>Across all your workspace scans</p>
             </div>
           </div>
 
@@ -267,11 +275,11 @@ function Dashboard() {
             <div>
               <small>Critical exposure</small>
               <h4>
-                {Number(riskDistribution.critical || 0)} critical scan
-                {Number(riskDistribution.critical || 0) === 1 ? '' : 's'}
+                {Number(riskDistribution.CRITICAL || 0)} critical scan
+                {Number(riskDistribution.CRITICAL || 0) === 1 ? '' : 's'}
               </h4>
               <p>
-                {Number(riskDistribution.critical || 0) > 0
+                {Number(riskDistribution.CRITICAL || 0) > 0
                   ? 'These scans should be reviewed and sanitized before external sharing.'
                   : 'No critical-risk scans are currently recorded.'}
               </p>
@@ -285,13 +293,12 @@ function Dashboard() {
             <div>
               <small>High-risk exposure</small>
               <h4>
-                {Number(d.high_risk_scans || 0)} scan
-                {Number(d.high_risk_scans || 0) === 1 ? '' : 's'} need
-                attention
+                {Number(d.high_risk_scans || 0)} originally high-risk scan
+                {Number(d.high_risk_scans || 0) === 1 ? '' : 's'}
               </h4>
               <p>
-                Review high-risk results and apply the recommended
-                de-identification policy before sharing sensitive content.
+                Review original high-risk results and verify sanitization
+                before sharing sensitive content.
               </p>
             </div>
           </div>
@@ -594,7 +601,7 @@ function HistoryPage() {
     const entitySearchText = (scan.entities || [])
       .flatMap((entity) => [
         entity.text,
-        entity.entity_type,
+        entity.entity_type || entity.type,
         entity.source,
       ])
       .filter(Boolean)
@@ -769,7 +776,7 @@ function HistoryPage() {
                   <b>{entity.text}</b>
 
                   <span>
-                    {entity.entity_type}
+                    {entity.entity_type || entity.type || 'OTHER'}
                   </span>
 
                   <span>
