@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { createRoot } from 'react-dom/client';
-import { ShieldCheck, LayoutDashboard, ScanSearch, History, FileText, LogOut, Menu, X, Activity, LockKeyhole } from 'lucide-react';
+import { ShieldCheck, LayoutDashboard, ScanSearch, History, FileText, LogOut, Menu, X, Activity, LockKeyhole, ShieldAlert, AlertTriangle, FileWarning } from 'lucide-react';
 import { api } from './services/api';
 import './styles/app.css';
 
@@ -19,7 +19,325 @@ function App() {
   return <div className="app"><aside className={mobile ? 'sidebar open' : 'sidebar'}><div className="sidebar-brand"><ShieldCheck size={27} /><span>PrivacyGuard <b>AI</b></span><button className="icon mobile-close" onClick={() => setMobile(false)}><X /></button></div><nav>{nav.map(([id, label, Icon]) => <button key={id} className={page === id ? 'nav-item active' : 'nav-item'} onClick={() => { setPage(id); setMobile(false) }}><Icon size={18} />{label}</button>)}</nav><div className="sidebar-bottom"><div className="user-mini"><div className="avatar">{user.name[0]}</div><div><b>{user.name}</b><small>{user.role}</small></div></div><button className="nav-item" onClick={logout}><LogOut size={18} />Sign out</button></div></aside><main className="main"><header className="topbar"><button className="icon mobile-menu" onClick={() => setMobile(true)}><Menu /></button><div><span className="eyebrow">SECURE DATA WORKSPACE</span><h1>{nav.find(x => x[0] === page)?.[1]}</h1></div><div className="top-status"><span className="status-dot"></span>Local analysis ready</div></header><section className="content">{page === 'dashboard' && <Dashboard />}{page === 'analyze' && <Analyzer />}{page === 'history' && <HistoryPage />}{page === 'audit' && <AuditPage />}</section></main></div>
 }
 
-function Dashboard() { const [d, setD] = useState(null); const [scans, setScans] = useState([]); useEffect(() => { Promise.all([api.dashboard(), api.scans()]).then(([a, b]) => { setD(a); setScans(b.slice(0, 5)) }) }, []); if (!d) return <Loading />; return <><div className="hero"><div><span className="tag">PRIVACY INTELLIGENCE</span><h2>Understand your data before it leaves your control.</h2><p>PrivacyGuard combines deterministic patterns, NLP detection, contextual analysis and risk-aware de-identification.</p></div><div className="hero-icon"><ShieldCheck size={48} /></div></div><div className="stats"><Stat label="Total scans" value={d.total_scans} /><Stat label="High-risk scans" value={d.high_risk_scans} /><Stat label="Average risk" value={`${d.average_risk}%`} /><Stat label="Entities found" value={d.entities_found} /></div><div className="grid-2"><div className="panel"><div className="panel-title"><div><h3>Risk distribution</h3><p>Across your recent workspace scans</p></div></div><div className="bars">{Object.entries(d.risk_distribution).map(([k, v]) => <div className="bar-row" key={k}><span>{k}</span><div className="bar"><i style={{ width: `${Math.min(100, v * 20)}%` }}></i></div><b>{v}</b></div>)}</div></div><div className="panel"><div className="panel-title"><div><h3>Recent scans</h3><p>Latest privacy assessments</p></div></div>{scans.length ? <div className="scan-list">{scans.map(s => <div className="scan-row" key={s.id}><div><b>{s.title}</b><small>{new Date(s.created_at).toLocaleString()}</small></div><Risk level={s.risk_level} score={s.risk_score} /></div>)}</div> : <Empty text="No scans yet. Start with New Analysis." />}</div></div></> }
+function Dashboard() {
+  const [d, setD] = useState(null);
+  const [scans, setScans] = useState([]);
+  const [piiCategories, setPiiCategories] = useState([]);
+  const [error, setError] = useState('');
+
+  useEffect(() => {
+    const loadDashboard = async () => {
+      try {
+        setError('');
+
+        const [dashboardData, scanData] = await Promise.all([
+          api.dashboard(),
+          api.scans(),
+        ]);
+
+        const summaries = Array.isArray(scanData) ? scanData : [];
+        const recentScans = summaries.slice(0, 5);
+
+        // Load the real entity data from each scan so the category
+        // analytics are based on actual detections, not sample values.
+        const details = await Promise.all(
+          summaries.map(async (scan) => {
+            try {
+              return await api.scan(scan.id);
+            } catch {
+              return null;
+            }
+          })
+        );
+
+        const counts = {};
+
+        details.forEach((scan) => {
+          if (!scan || !Array.isArray(scan.entities)) return;
+
+          scan.entities.forEach((entity) => {
+            const rawType = String(
+              entity.entity_type || entity.type || 'OTHER'
+            ).trim();
+
+            if (!rawType) return;
+
+            const normalized = rawType.toUpperCase();
+            counts[normalized] = (counts[normalized] || 0) + 1;
+          });
+        });
+
+        const categoryEntries = Object.entries(counts)
+          .sort((a, b) => b[1] - a[1])
+          .slice(0, 8);
+
+        setD(dashboardData);
+        setScans(recentScans);
+        setPiiCategories(categoryEntries);
+      } catch (err) {
+        setError(err.message || 'Unable to load dashboard data.');
+      }
+    };
+
+    loadDashboard();
+  }, []);
+
+  if (!d && error) {
+    return (
+      <div className="panel">
+        <div className="error">{error}</div>
+      </div>
+    );
+  }
+
+  if (!d) return <Loading />;
+
+  const riskDistribution = d.risk_distribution || {};
+  const riskEntries = Object.entries(riskDistribution).map(([level, value]) => [
+    level,
+    Number(value || 0),
+  ]);
+
+  const totalRiskScans = riskEntries.reduce(
+    (sum, [, value]) => sum + value,
+    0
+  );
+
+  const totalPiiEntities = piiCategories.reduce(
+    (sum, [, value]) => sum + Number(value || 0),
+    0
+  );
+
+  const getCategoryPercentage = (count) =>
+    totalPiiEntities > 0
+      ? Math.round((Number(count) / totalPiiEntities) * 100)
+      : 0;
+
+  const formatCategory = (value) =>
+    String(value)
+      .replace(/_/g, ' ')
+      .replace(/\b\w/g, (char) => char.toUpperCase());
+
+  return (
+    <>
+      <div className="hero">
+        <div>
+          <span className="tag">PRIVACY INTELLIGENCE</span>
+          <h2>Understand your data before it leaves your control.</h2>
+          <p>
+            PrivacyGuard combines deterministic patterns, NLP detection,
+            contextual analysis and risk-aware de-identification.
+          </p>
+        </div>
+        <div className="hero-icon">
+          <ShieldCheck size={48} />
+        </div>
+      </div>
+
+      <div className="stats">
+        <Stat label="Total scans" value={d.total_scans ?? 0} />
+        <Stat label="High-risk scans" value={d.high_risk_scans ?? 0} />
+        <Stat
+          label="Average risk"
+          value={`${Number(d.average_risk || 0).toFixed(1)}%`}
+        />
+        <Stat label="Entities found" value={d.entities_found ?? 0} />
+      </div>
+
+      <div className="grid-2">
+        <div className="panel">
+          <div className="panel-title">
+            <div>
+              <h3>Risk distribution</h3>
+              <p>Across your recent workspace scans</p>
+            </div>
+          </div>
+
+          {riskEntries.length ? (
+            <div className="bars">
+              {riskEntries.map(([level, count]) => {
+                const percentage =
+                  totalRiskScans > 0
+                    ? Math.round((count / totalRiskScans) * 100)
+                    : 0;
+
+                return (
+                  <div className="bar-row" key={level}>
+                    <span>{String(level).toUpperCase()}</span>
+                    <div
+                      className="bar"
+                      title={`${count} scan${count === 1 ? '' : 's'} (${percentage}%)`}
+                    >
+                      <i style={{ width: `${percentage}%` }} />
+                    </div>
+                    <b>
+                      {count} <small>({percentage}%)</small>
+                    </b>
+                  </div>
+                );
+              })}
+            </div>
+          ) : (
+            <Empty text="No risk distribution data available yet." />
+          )}
+        </div>
+
+        <div className="panel">
+          <div className="panel-title">
+            <div>
+              <h3>Recent scans</h3>
+              <p>Latest privacy assessments</p>
+            </div>
+          </div>
+
+          {scans.length ? (
+            <div className="scan-list">
+              {scans.map((s) => (
+                <div className="scan-row" key={s.id}>
+                  <div>
+                    <b>{s.title || 'Untitled scan'}</b>
+                    <small>
+                      {s.created_at
+                        ? new Date(s.created_at).toLocaleString()
+                        : 'Date unavailable'}
+                    </small>
+                  </div>
+                  <Risk
+                    level={s.risk_level || 'UNKNOWN'}
+                    score={Number(s.risk_score || 0)}
+                  />
+                </div>
+              ))}
+            </div>
+          ) : (
+            <Empty text="No scans yet. Start with New Analysis." />
+          )}
+        </div>
+      </div>
+
+      <div className="panel" style={{ marginTop: '20px' }}>
+        <div className="panel-title">
+          <div>
+            <h3>PII category analytics</h3>
+            <p>Actual detected entity categories across your scans</p>
+          </div>
+          <span className="tag">{totalPiiEntities} ENTITIES</span>
+        </div>
+
+        {piiCategories.length ? (
+          <div className="bars">
+            {piiCategories.map(([category, count]) => {
+              const percentage = getCategoryPercentage(count);
+
+              return (
+                <div className="bar-row" key={category}>
+                  <span title={category}>{formatCategory(category)}</span>
+                  <div
+                    className="bar"
+                    title={`${count} detected (${percentage}%)`}
+                  >
+                    <i style={{ width: `${percentage}%` }} />
+                  </div>
+                  <b>
+                    {count} <small>({percentage}%)</small>
+                  </b>
+                </div>
+              );
+            })}
+          </div>
+        ) : (
+          <Empty text="No PII category data available yet. Run an analysis first." />
+        )}
+      </div>
+
+      <div className="panel" style={{ marginTop: '20px' }}>
+        <div className="panel-title">
+          <div>
+            <h3>Privacy risk insights</h3>
+            <p>Actionable observations from your current workspace scans</p>
+          </div>
+          <span className="tag">RISK INTELLIGENCE</span>
+        </div>
+
+        <div className="grid-2">
+          <div className="panel">
+            <div className="insight-icon critical">
+              <ShieldAlert size={22} />
+            </div>
+            <div>
+              <small>Critical exposure</small>
+              <h4>
+                {Number(riskDistribution.critical || 0)} critical scan
+                {Number(riskDistribution.critical || 0) === 1 ? '' : 's'}
+              </h4>
+              <p>
+                {Number(riskDistribution.critical || 0) > 0
+                  ? 'These scans should be reviewed and sanitized before external sharing.'
+                  : 'No critical-risk scans are currently recorded.'}
+              </p>
+            </div>
+          </div>
+
+          <div className="panel">
+            <div className="insight-icon warning">
+              <AlertTriangle size={22} />
+            </div>
+            <div>
+              <small>High-risk exposure</small>
+              <h4>
+                {Number(d.high_risk_scans || 0)} scan
+                {Number(d.high_risk_scans || 0) === 1 ? '' : 's'} need
+                attention
+              </h4>
+              <p>
+                Review high-risk results and apply the recommended
+                de-identification policy before sharing sensitive content.
+              </p>
+            </div>
+          </div>
+
+          <div className="panel">
+            <div className="insight-icon">
+              <ShieldCheck size={22} />
+            </div>
+            <div>
+              <small>Most detected PII</small>
+              <h4>
+                {piiCategories.length
+                  ? formatCategory(piiCategories[0][0])
+                  : 'No category yet'}
+              </h4>
+              <p>
+                {piiCategories.length
+                  ? `${piiCategories[0][1]} detection${piiCategories[0][1] === 1 ? '' : 's'} across the recorded scans.`
+                  : 'Run an analysis to generate PII category insights.'}
+              </p>
+            </div>
+          </div>
+
+          <div className="panel">
+            <div className="insight-icon">
+              <FileWarning size={22} />
+            </div>
+            <div>
+              <small>Recommended action</small>
+              <h4>
+                {Number(d.high_risk_scans || 0) > 0
+                  ? 'Review and sanitize'
+                  : 'Continue monitoring'}
+              </h4>
+              <p>
+                {Number(d.high_risk_scans || 0) > 0
+                  ? 'Open the affected scans, inspect detected entities and verify the sanitized output.'
+                  : 'Continue monitoring new scans and validate sensitive detections when needed.'}
+              </p>
+            </div>
+          </div>
+        </div>
+      </div>
+    </>
+  );
+}
 function Stat({ label, value }) { return <div className="stat"><small>{label}</small><strong>{value}</strong><span>workspace metric</span></div> }
 function Risk({ level, score }) { return <span className={`risk ${String(level).toLowerCase()}`}>{level} · {Math.round(score * 100)}%</span> }
 function Loading() { return <div className="loading">Loading secure workspace…</div> }
@@ -189,9 +507,34 @@ function HistoryPage() {
   const [sortBy, setSortBy] = useState('newest');
 
   useEffect(() => {
-    api.scans()
-      .then(setRows)
-      .catch((err) => setError(err.message));
+  const loadHistory = async () => {
+    try {
+      const summaries = await api.scans();
+
+      const detailedRows = await Promise.all(
+        summaries.map(async (scan) => {
+          try {
+            const fullScan = await api.scan(scan.id);
+
+            return {
+              ...scan,
+              entities: fullScan.entities || [],
+              original_text: fullScan.original_text || '',
+              sanitized_text: fullScan.sanitized_text || '',
+            };
+          } catch {
+            return scan;
+          }
+        })
+      );
+
+      setRows(detailedRows);
+    } catch (err) {
+      setError(err.message);
+    }
+  };
+
+  loadHistory();
   }, []);
 
   const openScan = async (id) => {
@@ -248,17 +591,28 @@ function HistoryPage() {
 
     if (!query) return true;
 
-    return (
-      String(scan.title || '')
-        .toLowerCase()
-        .includes(query) ||
-      String(scan.source_type || '')
-        .toLowerCase()
-        .includes(query) ||
-      String(scan.risk_level || '')
-        .toLowerCase()
-        .includes(query)
-    );
+    const entitySearchText = (scan.entities || [])
+      .flatMap((entity) => [
+        entity.text,
+        entity.entity_type,
+        entity.source,
+      ])
+      .filter(Boolean)
+      .join(' ');
+
+    const searchableText = [
+      scan.title,
+      scan.source_type,
+      scan.risk_level,
+      scan.original_text,
+      scan.sanitized_text,
+      entitySearchText,
+    ]
+      .filter(Boolean)
+      .join(' ')
+      .toLowerCase();
+
+    return searchableText.includes(query);
   })
   .filter((scan) => {
     if (riskFilter === 'all') return true;
